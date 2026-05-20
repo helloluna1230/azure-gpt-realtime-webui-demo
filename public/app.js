@@ -513,6 +513,7 @@ function routeServerEvent(event) {
   if (event.type === "response.done" && event.response) {
     onTurnCompleted();
     appendExtractedResponse(event.response);
+    surfaceIncompleteResponse(event.response);
     return;
   }
 
@@ -646,6 +647,28 @@ function appendExtractedResponse(response) {
   if (fragments.length) {
     appendCompletedOutputTranscript(fragments.join("\n"));
   }
+}
+
+function surfaceIncompleteResponse(response) {
+  if (!response || response.status !== "incomplete") return;
+  const details = response.status_details || {};
+  const reason = details.reason || details.type || "unknown";
+  const reasonHint = {
+    content_filter: "Azure 内容过滤命中，模型被强制中止。",
+    interrupted: "server_vad 检测到声音触发 barge-in，模型被打断（可能是回声）。",
+    cancelled: "客户端发出取消，或数据通道断开。",
+    canceled: "客户端发出取消，或数据通道断开。",
+    max_output_tokens: "命中 max_output_tokens 上限。",
+    turn_detected: "新一轮对话开始，前一回答被截断。",
+  }[reason] || "Azure 标记 response 为 incomplete。";
+  const error = details.error?.message ? ` · ${details.error.message}` : "";
+  appendTranscript(
+    "output",
+    "系统",
+    `\n[回答被截断] reason=${reason} · ${reasonHint}${error}`,
+    { startNew: true, complete: true }
+  );
+  log(`[response.incomplete] reason=${reason}${error}`);
 }
 
 function appendSource(text, options = {}) {
