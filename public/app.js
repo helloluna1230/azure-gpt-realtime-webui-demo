@@ -15,6 +15,9 @@ const state = {
   streamedOutputItemIds: new Set(),
   multiOutputWarnings: new Set(),
   seenFailureKeys: new Set(),
+  agentSpeaking: false,
+  echoSuppressUntil: 0,
+  echoNoticeShown: false,
   metrics: createMetricsState(),
 };
 
@@ -437,6 +440,19 @@ function routeServerEvent(event) {
   }
 
   warnIfMultipleOutputItems(event);
+
+  if (event.type === "response.created") {
+    state.agentSpeaking = true;
+  }
+
+  if (
+    event.type === "response.done" ||
+    event.type === "response.cancelled" ||
+    event.type === "response.canceled"
+  ) {
+    state.agentSpeaking = false;
+    state.echoSuppressUntil = performance.now() + 700;
+  }
 
   if (event.type === "input_audio_buffer.speech_started") {
     onSpeechStarted();
@@ -1010,6 +1026,9 @@ function clearTranscripts() {
   state.streamedOutputItemIds.clear();
   state.multiOutputWarnings.clear();
   state.seenFailureKeys.clear();
+  state.agentSpeaking = false;
+  state.echoSuppressUntil = 0;
+  state.echoNoticeShown = false;
   els.sourceTranscript.innerHTML = "";
   els.outputTranscript.innerHTML = "";
   els.eventLog.textContent = "";
