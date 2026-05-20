@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Azure GPT Realtime WebRTC Demo</title>
+    <meta name="theme-color" content="#f5f5f7" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="preloader" class="preloader" aria-hidden="true">
+      <span class="preloader-panel preloader-panel--left"></span>
+      <span class="preloader-panel preloader-panel--right"></span>
+      <span class="preloader-mark">
+        <span class="preloader-mark-inner">REALTIME · STUDIO</span>
+      </span>
+    </div>
+    <div class="ambient" aria-hidden="true">
+      <span class="orb orb-blue" data-parallax="0.04"></span>
+      <span class="orb orb-silver" data-parallax="0.025"></span>
+      <span class="orb orb-gold" data-parallax="0.06"></span>
+    </div>
+    <div class="grain" aria-hidden="true"></div>
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy-block">
+          <p class="eyebrow" style="--i:0">Azure OpenAI · Realtime API · WebRTC</p>
+          <h1 class="headline" aria-label="Realtime Studio">
+            <span class="word" style="--i:1"><span class="word-inner">Realtime</span></span>
+            <span class="word" style="--i:2"><span class="word-inner">Studio</span></span>
+          </h1>
+          <p class="hero-copy" style="--i:3">
+            一个浏览器麦克风入口，优雅切换 <strong>GPT-realtime-2</strong> 语音 Agent、
+            <strong>GPT-realtime-translate</strong> 实时翻译与
+            <strong>GPT-realtime-whisper</strong> 流式转写。
+          </p>
+          <div class="hero-pills" aria-label="Demo capabilities" style="--i:4">
+            <span style="--i:0">低延迟 WebRTC</span>
+            <span style="--i:1">API Key 优先</span>
+            <span style="--i:2">Azure GA endpoints</span>
+          </div>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Session</span>
+          <span id="connectionDot" class="dot"></span>
+          <div>
+            <p id="connectionLabel">未连接</p>
+            <small id="connectionHint">选择一个模式，然后点击“开始 WebRTC 会话”。</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="tabs" role="tablist" aria-label="Realtime demo modes">
+          <button class="tab active" type="button" data-mode="agent" data-reveal style="--i:1"><span>Agent</span><small>GPT-realtime-2</small></button>
+          <button class="tab" type="button" data-mode="translate" data-reveal style="--i:2"><span>Translate</span><small>Live interpretation</small></button>
+          <button class="tab" type="button" data-mode="transcribe" data-reveal style="--i:3"><span>Whisper</span><small>Streaming STT</small></button>
+        </div>
+
+        <div class="grid">
+          <aside class="controls">
+            <div class="mode-copy active" data-copy="agent">
+              <h2>语音 Agent</h2>
+              <p>标准 Realtime 会话，使用 <code>gpt-realtime-2</code> 进行语音输入/输出，并启用 <code>reasoning.effort</code>。</p>
+            </div>
+            <div class="mode-copy" data-copy="translate">
+              <h2>实时翻译</h2>
+              <p>使用原生 <code>gpt-realtime-translate</code> transcription session，并按 <code>useful.md</code> 的最小 payload 只传 <code>audio.input.transcription.model</code>。</p>
+            </div>
+            <div class="mode-copy" data-copy="transcribe">
+              <h2>实时转写</h2>
+              <p>transcription session，使用 <code>gpt-realtime-whisper</code> 产生低延迟 transcript delta。</p>
+            </div>
+
+            <div class="field field-agent">
+              <label for="voice">输出声音</label>
+              <select id="voice">
+                <option>alloy</option>
+                <option>ash</option>
+                <option>ballad</option>
+                <option>coral</option>
+                <option>echo</option>
+                <option>sage</option>
+                <option>shimmer</option>
+                <option>verse</option>
+              </select>
+            </div>
+
+            <div class="field field-agent">
+              <label for="reasoningEffort">reasoning.effort</label>
+              <select id="reasoningEffort">
+                <option value="minimal" selected>minimal · 推荐，避免分段</option>
+                <option value="low">low · 轻量推理</option>
+                <option value="medium">medium · 多步骤任务</option>
+                <option value="high">high · 更深推理</option>
+                <option value="xhigh">xhigh · 最大推理</option>
+              </select>
+            </div>
+
+            <div class="field field-no-translate">
+              <label for="turnDetection">断句策略</label>
+              <select id="turnDetection">
+                <option value="server_vad" selected>server_vad</option>
+                <option value="semantic_vad">semantic_vad</option>
+                <option value="none">手动 commit</option>
+              </select>
+            </div>
+
+            <div class="field field-no-translate field-vad-server">
+              <label for="vadThreshold">VAD 阈值 <small id="vadThresholdValue">0.50</small></label>
+              <input id="vadThreshold" type="range" min="0.1" max="0.95" step="0.05" value="0.5" />
+            </div>
+
+            <div class="field field-no-translate field-vad-server">
+              <label for="silenceDurationMs">静音判停 <small id="silenceDurationMsValue">450 ms</small></label>
+              <input id="silenceDurationMs" type="range" min="150" max="1500" step="50" value="450" />
+            </div>
+
+            <div class="field field-no-translate field-vad-server">
+              <label for="prefixPaddingMs">语音前置缓冲 <small id="prefixPaddingMsValue">300 ms</small></label>
+              <input id="prefixPaddingMs" type="range" min="0" max="800" step="50" value="300" />
+            </div>
+
+            <div class="field field-agent">
+              <label class="checkbox"><input id="enableInputTranscription" type="checkbox" checked /> 打印用户输入转写</label>
+            </div>
+
+            <div class="field field-agent">
+              <label class="checkbox"><input id="interruptResponse" type="checkbox" /> 允许说话打断 Agent 语音</label>
+            </div>
+
+            <div class="field field-shared">
+              <label for="sourceLanguage">源语言提示</label>
+              <select id="sourceLanguage">
+                <option value="" selected>自动检测</option>
+                <option value="zh">中文 zh</option>
+                <option value="en">English en</option>
+                <option value="es">Español es</option>
+                <option value="fr">Français fr</option>
+                <option value="ja">日本語 ja</option>
+                <option value="ko">한국어 ko</option>
+              </select>
+            </div>
+
+            <div class="field field-shared">
+              <label for="noiseReduction">麦克风场景</label>
+              <select id="noiseReduction">
+                <option value="near_field" selected>near_field · 耳机/近讲</option>
+                <option value="far_field">far_field · 笔记本/会议室</option>
+              </select>
+            </div>
+
+            <div class="field field-agent field-instructions">
+              <label for="instructions">Agent 指令（可选）</label>
+              <textarea id="instructions" rows="6" placeholder="留空使用内置中文/英文多语言实时助手提示词"></textarea>
+            </div>
+
+            <div class="buttons">
+              <button id="startBtn" class="primary magnetic" type="button"><span class="magnetic-label">开始 WebRTC 会话</span></button>
+              <button id="stopBtn" type="button" disabled>停止</button>
+            </div>
+          </aside>
+
+          <section class="workspace">
+            <div class="audio-strip">
+              <span>Remote audio</span>
+              <audio id="remoteAudio" autoplay playsinline controls></audio>
+            </div>
+
+            <div class="mic-strip" aria-label="Local microphone level">
+              <span class="mic-strip-label">Mic input</span>
+              <div class="mic-meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="micMeter">
+                <span class="mic-meter-fill" id="micMeterFill"></span>
+                <span class="mic-meter-peak" id="micMeterPeak"></span>
+              </div>
+              <span class="mic-strip-value" id="micMeterValue">— dB</span>
+            </div>
+
+            <div class="agent-tools active" data-tools="agent">
+              <div class="inline-form">
+                <input id="textPrompt" type="text" placeholder="也可以输入文本触发一次语音回答，例如：帮我规划一次北京到东京的三日行程" />
+                <button id="sendTextBtn" type="button" disabled>发送文本</button>
+                <button id="manualResponseBtn" type="button" disabled>提交语音并回答</button>
+              </div>
+            </div>
+
+            <div class="agent-tools hidden" data-tools="transcribe">
+              <button id="commitAudioBtn" type="button" disabled>提交当前音频缓冲区</button>
+              <span class="hint">如果你的区域要求手动切分转写，可先讲话再点击此按钮。</span>
+            </div>
+
+            <div id="transcriptCards" class="cards single-card">
+              <article id="sourceCard" class="transcript-card">
+                <h3 id="sourceTranscriptTitle">对话记录（User / Agent）</h3>
+                <pre id="sourceTranscript" class="transcript"></pre>
+              </article>
+              <article id="outputCard" class="transcript-card hidden">
+                <h3 id="outputTranscriptTitle">模型输出</h3>
+                <pre id="outputTranscript" class="transcript"></pre>
+              </article>
+            </div>
+
+            <details class="metrics-shell" open>
+              <summary>
+                <span class="metrics-shell-title">性能指标</span>
+                <span class="metrics-shell-stream" aria-live="polite">
+                  <span id="metricsStreamDot" class="stream-dot" data-state="idle"></span>
+                  <span id="metricsStreamLabel" class="stream-label">空闲</span>
+                  <span id="metricsStreamMeta" class="stream-meta">等待会话开始</span>
+                </span>
+              </summary>
+              <section class="metrics" aria-label="Realtime performance metrics">
+                <div class="metrics-progress" aria-hidden="true">
+                  <span id="metricsProgressFill" class="metrics-progress-fill"></span>
+                </div>
+                <div class="metrics-grid">
+                  <article class="metric-tile" data-metric="ttft">
+                    <span class="metric-tile-label">TTFT 首字延迟</span>
+                    <span class="metric-tile-value"><span id="metricTtft">—</span><small>ms</small></span>
+                    <span class="metric-tile-hint" id="metricTtftHint">本轮 / 上轮</span>
+                  </article>
+                  <article class="metric-tile" data-metric="ttfa">
+                    <span class="metric-tile-label">TTFA 首声延迟</span>
+                    <span class="metric-tile-value"><span id="metricTtfa">—</span><small>ms</small></span>
+                    <span class="metric-tile-hint" id="metricTtfaHint">仅 Agent 模式</span>
+                  </article>
+                  <article class="metric-tile" data-metric="e2e">
+                    <span class="metric-tile-label">E2E 端到端</span>
+                    <span class="metric-tile-value"><span id="metricE2e">—</span><small>ms</small></span>
+                    <span class="metric-tile-hint" id="metricE2eHint">stop → done</span>
+                  </article>
+                  <article class="metric-tile" data-metric="rtf">
+                    <span class="metric-tile-label">RTF 实时系数</span>
+                    <span class="metric-tile-value"><span id="metricRtf">—</span><small>×</small></span>
+                    <span class="metric-tile-hint" id="metricRtfHint">&lt; 1 即超实时</span>
+                  </article>
+                </div>
+                <div class="metrics-chips">
+                  <span class="metric-chip" title="本轮已收到的字符数 / delta 数"><b>Chars</b><span id="metricChars">0</span></span>
+                  <span class="metric-chip" title="字符吞吐（最近 1s）"><b>Char/s</b><span id="metricCharRate">0</span></span>
+                  <span class="metric-chip" title="每秒收到的 delta 数"><b>Δ/s</b><span id="metricDeltaRate">0</span></span>
+                  <span class="metric-chip" title="握手：ICE connected / DataChannel open / session.created"><b>Setup</b><span id="metricSetup">—</span></span>
+                  <span class="metric-chip" title="Azure 服务端耗时（从 Server-Timing 响应头获取）"><b>Azure</b><span id="metricAzure">—</span></span>
+                  <span class="metric-chip" title="WebRTC RTT（远端往返）"><b>RTT</b><span id="metricRtt">—</span></span>
+                  <span class="metric-chip" title="WebRTC jitter（下行抖动）"><b>Jitter</b><span id="metricJitter">—</span></span>
+                  <span class="metric-chip" title="下行音频丢包率"><b>Loss</b><span id="metricLoss">—</span></span>
+                  <span class="metric-chip" title="本会话已完成的对话轮数"><b>Turns</b><span id="metricTurns">0</span></span>
+                </div>
+                <canvas id="metricsSparkline" class="metrics-sparkline" width="600" height="40" aria-hidden="true"></canvas>
+                <div class="metrics-aggregate hidden" id="metricsAggregate" aria-label="Aggregate latency distribution">
+                  <header>
+                    <span class="metrics-eyebrow">Aggregate</span>
+                    <small id="metricsAggregateMeta">n = 0</small>
+                  </header>
+                  <table>
+                    <thead>
+                      <tr><th></th><th>p50</th><th>p95</th><th>min</th><th>max</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr data-row="ttft"><th>TTFT</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
+                      <tr data-row="ttfa"><th>TTFA</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
+                      <tr data-row="e2e"><th>E2E</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
+                      <tr data-row="rtf"><th>RTF</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </details>
+
+            <details class="log" open>
+              <summary>事件日志</summary>
+              <pre id="eventLog"></pre>
+            </details>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <template id="toastTemplate">
+      <div class="toast"></div>
+    </template>
+
+    <script type="module" src="/premium-ux.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
