@@ -16,11 +16,8 @@ const state = {
   multiOutputWarnings: new Set(),
   seenFailureKeys: new Set(),
   agentSpeaking: false,
-  echoSuppressUntil: 0,
-  echoNoticeShown: false,
   micGated: false,
   micGateTimer: 0,
-  openSourceSectionOffset: -1,
   metrics: createMetricsState(),
 };
 
@@ -32,12 +29,13 @@ function createMetricsState() {
     sessionCreatedAt: 0,
     speechStartedAt: 0,
     speechStoppedAt: 0,
+    responseCreatedAt: 0,
     firstDeltaAt: 0,
     firstAudibleAt: 0,
     turnCompletedAt: 0,
     audioInputMs: 0,
-    turn: { ttftMs: null, ttfaMs: null, e2eMs: null, rtfRatio: null },
-    last: { ttftMs: null, ttfaMs: null, e2eMs: null, rtfRatio: null },
+    turn: { ttftMs: null, ttfaMs: null, e2eMs: null, outTokPerSec: null, outputTokens: null },
+    last: { ttftMs: null, ttfaMs: null, e2eMs: null, outTokPerSec: null, outputTokens: null },
     history: [],
     serverTiming: null,
     chars: 0,
@@ -49,7 +47,8 @@ function createMetricsState() {
     statsTimer: 0,
     streamingTickTimer: 0,
     rtcRttMs: null,
-    rtcJitterMs: null,
+    rtcJitterUpMs: null,
+    rtcJitterDownMs: null,
     rtcLossPct: null,
     sparkline: [],
     mic: {
@@ -93,6 +92,7 @@ const els = {
   interruptResponse: document.querySelector("#interruptResponse"),
   sourceLanguage: document.querySelector("#sourceLanguage"),
   noiseReduction: document.querySelector("#noiseReduction"),
+  transcriptionPrompt: document.querySelector("#transcriptionPrompt"),
   instructions: document.querySelector("#instructions"),
   metric: {
     streamDot: document.querySelector("#metricsStreamDot"),
@@ -103,22 +103,21 @@ const els = {
     tileTtft: document.querySelector('[data-metric="ttft"]'),
     tileTtfa: document.querySelector('[data-metric="ttfa"]'),
     tileE2e: document.querySelector('[data-metric="e2e"]'),
-    tileRtf: document.querySelector('[data-metric="rtf"]'),
     ttft: document.querySelector("#metricTtft"),
     ttftHint: document.querySelector("#metricTtftHint"),
     ttfa: document.querySelector("#metricTtfa"),
     ttfaHint: document.querySelector("#metricTtfaHint"),
     e2e: document.querySelector("#metricE2e"),
     e2eHint: document.querySelector("#metricE2eHint"),
-    rtf: document.querySelector("#metricRtf"),
-    rtfHint: document.querySelector("#metricRtfHint"),
     chars: document.querySelector("#metricChars"),
     charRate: document.querySelector("#metricCharRate"),
     deltaRate: document.querySelector("#metricDeltaRate"),
     setup: document.querySelector("#metricSetup"),
     azure: document.querySelector("#metricAzure"),
     rtt: document.querySelector("#metricRtt"),
-    jitter: document.querySelector("#metricJitter"),
+    outTokPerSec: document.querySelector("#metricOutTokPerSec"),
+    jitterUp: document.querySelector("#metricJitterUp"),
+    jitterDown: document.querySelector("#metricJitterDown"),
     loss: document.querySelector("#metricLoss"),
     turns: document.querySelector("#metricTurns"),
     sparkline: document.querySelector("#metricsSparkline"),
@@ -443,6 +442,10 @@ function routeServerEvent(event) {
     updateSetupHint();
   }
 
+  if (event.type === "response.created") {
+    state.metrics.responseCreatedAt = performance.now();
+  }
+
   warnIfMultipleOutputItems(event);
 
   if (event.type === "response.created") {
@@ -456,7 +459,6 @@ function routeServerEvent(event) {
     event.type === "response.canceled"
   ) {
     state.agentSpeaking = false;
-    state.echoSuppressUntil = performance.now() + 400;
     scheduleLocalMicUngate();
   }
 
@@ -473,7 +475,13 @@ function routeServerEvent(event) {
   }
 
   if (event.type === "conversation.item.input_audio_transcription.delta") {
-    onDeltaReceived(event.delta);
+    // In agent mode this is the USER's microphone being transcribed by Whisper
+    // and must not pollute TTFT / Chars / Char-rate (those track the model's
+    // own output). Only feed it into the metrics pipeline for transcribe and
+    // translate modes where this stream IS the output.
+    if (state.mode !== "agent") {
+      onDeltaReceived(event.delta);
+    }
     appendInputAudioTranscriptionDelta(event.delta);
     return;
   }
@@ -517,7 +525,7 @@ function routeServerEvent(event) {
   }
 
   if (event.type === "response.done" && event.response) {
-    onTurnCompleted();
+    onTurnCompleted(event.response);
     appendExtractedResponse(event.response);
     surfaceIncompleteResponse(event.response);
     return;
@@ -613,6 +621,7 @@ function collectOptions() {
   const options = {
     noiseReduction: els.noiseReduction.value,
     sourceLanguage: els.sourceLanguage.value || undefined,
+    transcriptionPrompt: els.transcriptionPrompt?.value.trim() || undefined,
   };
 
   // turnDetection / VAD numerics apply to every mode (server honors them in
@@ -768,9 +777,6 @@ function appendTranscript(target, label, text, { startNew = false, complete = fa
     if (state[bufferKey] && !state[bufferKey].endsWith("\n\n")) {
       state[bufferKey] += "\n";
     }
-    if (transcriptTarget(target) === "source" && target === "source") {
-      state.openSourceSectionOffset = state[bufferKey].length;
-    }
     state[bufferKey] += `【${label}】\n`;
     state[openKey] = true;
   } else if (!state[openKey] && !hasVisibleText) {
@@ -787,9 +793,6 @@ function appendTranscript(target, label, text, { startNew = false, complete = fa
       state[bufferKey] += "\n";
     }
     state[openKey] = false;
-    if (target === "source") {
-      state.openSourceSectionOffset = -1;
-    }
   }
 
   renderTranscript(target);
@@ -882,11 +885,6 @@ function appendInputAudioTranscriptionDelta(delta) {
     return;
   }
 
-  if (shouldSuppressEchoTranscript()) {
-    noteEchoSuppression();
-    return;
-  }
-
   appendSource(delta);
 }
 
@@ -900,28 +898,7 @@ function appendCompletedInputAudioTranscript(transcript) {
     return;
   }
 
-  if (shouldSuppressEchoTranscript()) {
-    rollbackOpenSourceSection();
-    noteEchoSuppression();
-    return;
-  }
-
   appendCompletedSourceTranscript(transcript);
-}
-
-function shouldSuppressEchoTranscript() {
-  if (state.mode !== "agent") return false;
-  if (els.interruptResponse?.checked) return false;
-  if (state.agentSpeaking) return true;
-  return performance.now() < state.echoSuppressUntil;
-}
-
-function noteEchoSuppression() {
-  if (state.echoNoticeShown) return;
-  state.echoNoticeShown = true;
-  log(
-    "[回声抑制] Agent 说话期间麦克风已静音；任何漏入的转写已丢弃。"
-  );
 }
 
 function gateLocalMicForAgent() {
@@ -959,14 +936,6 @@ function setLocalMicEnabled(enabled, reason) {
   if (prev !== state.micGated) {
     log(`[mic] ${enabled ? "解除" : "静音"} (${reason})`);
   }
-}
-
-function rollbackOpenSourceSection() {
-  if (state.openSourceSectionOffset < 0) return;
-  state.sourceBuffer = state.sourceBuffer.slice(0, state.openSourceSectionOffset);
-  state.openSourceSectionOffset = -1;
-  state.sourceSectionOpen = false;
-  renderTranscript("source");
 }
 
 function appendInputAudioTranscriptionFailure(event) {
@@ -1096,7 +1065,10 @@ function appendConversationItemTranscript(item) {
 }
 
 function normalizeTranscript(value) {
-  return value.replace(/\s+/g, " ").trim();
+  // Strip U+FFFD replacement characters so the streamed (clean) buffer can
+  // still dedupe against a final transcript that came back with corrupted
+  // bytes — otherwise we'd render the same user turn twice.
+  return value.replace(/\uFFFD/g, "").replace(/\s+/g, " ").trim();
 }
 
 function transcriptTarget(target) {
@@ -1133,9 +1105,6 @@ function clearTranscripts() {
   state.multiOutputWarnings.clear();
   state.seenFailureKeys.clear();
   state.agentSpeaking = false;
-  state.echoSuppressUntil = 0;
-  state.echoNoticeShown = false;
-  state.openSourceSectionOffset = -1;
   if (state.micGateTimer) {
     clearTimeout(state.micGateTimer);
     state.micGateTimer = 0;
@@ -1263,11 +1232,12 @@ function onSpeechStarted() {
   const now = performance.now();
   state.metrics.speechStartedAt = now;
   state.metrics.speechStoppedAt = 0;
+  state.metrics.responseCreatedAt = 0;
   state.metrics.firstDeltaAt = 0;
   state.metrics.firstAudibleAt = 0;
   state.metrics.turnCompletedAt = 0;
   state.metrics.audioInputMs = 0;
-  state.metrics.turn = { ttftMs: null, ttfaMs: null, e2eMs: null, rtfRatio: null };
+  state.metrics.turn = { ttftMs: null, ttfaMs: null, e2eMs: null, outTokPerSec: null, outputTokens: null };
   state.metrics.chars = 0;
   state.metrics.deltaCount = 0;
   state.metrics.charSamples = [];
@@ -1309,16 +1279,25 @@ function onDeltaReceived(delta) {
   renderMetrics();
 }
 
-function onTurnCompleted() {
+function onTurnCompleted(response) {
   const now = performance.now();
   if (state.metrics.turnCompletedAt) {
     return;
   }
   state.metrics.turnCompletedAt = now;
-  if (state.metrics.speechStoppedAt) {
-    state.metrics.turn.e2eMs = Math.round(now - state.metrics.speechStoppedAt);
-    if (state.metrics.audioInputMs > 0) {
-      state.metrics.turn.rtfRatio = state.metrics.turn.e2eMs / state.metrics.audioInputMs;
+  const anchor = state.metrics.speechStoppedAt || state.metrics.responseCreatedAt;
+  if (anchor) {
+    state.metrics.turn.e2eMs = Math.round(now - anchor);
+  }
+  // Output tokens per second: real model generation speed.
+  // Window = firstDeltaAt → now (excludes TTFT wait). Falls back to anchor if no deltas.
+  const outTok = response?.usage?.output_tokens;
+  if (typeof outTok === "number" && outTok > 0) {
+    state.metrics.turn.outputTokens = outTok;
+    const genStart = state.metrics.firstDeltaAt || anchor;
+    const genMs = genStart ? now - genStart : 0;
+    if (genMs > 0) {
+      state.metrics.turn.outTokPerSec = Math.round((outTok / genMs) * 1000 * 10) / 10;
     }
   }
   state.metrics.last = { ...state.metrics.turn };
@@ -1328,7 +1307,6 @@ function onTurnCompleted() {
   }
   state.metrics.turns += 1;
   flashTile(els.metric.tileE2e);
-  flashTile(els.metric.tileRtf);
   setStreamState("done", "本轮完成", formatTurnSummary());
   stopStreamingTick();
   renderMetrics();
@@ -1339,8 +1317,9 @@ function formatTurnSummary() {
   const t = state.metrics.turn;
   const parts = [];
   if (t.ttftMs != null) parts.push(`TTFT ${t.ttftMs}ms`);
+  if (t.ttfaMs != null) parts.push(`TTFA ${t.ttfaMs}ms`);
   if (t.e2eMs != null) parts.push(`E2E ${t.e2eMs}ms`);
-  if (t.rtfRatio != null) parts.push(`RTF ${t.rtfRatio.toFixed(2)}×`);
+  if (t.outTokPerSec != null) parts.push(`${t.outTokPerSec} tok/s`);
   return parts.join(" · ") || "等待下一轮";
 }
 
@@ -1420,7 +1399,8 @@ function startStatsPolling() {
     try {
       const stats = await state.pc.getStats();
       let rttMs = null;
-      let jitterMs = null;
+      let jitterUpMs = null;
+      let jitterDownMs = null;
       let lossPct = null;
       let outboundAudioLevel = null;
       let inboundTotalEnergy = null;
@@ -1432,11 +1412,13 @@ function startStatsPolling() {
           if (typeof report.audioLevel === "number") outboundAudioLevel = report.audioLevel;
         }
         if (report.type === "remote-inbound-rtp" && report.kind === "audio") {
+          // Azure's view of OUR microphone uplink: RTT + uplink jitter.
           if (typeof report.roundTripTime === "number") rttMs = report.roundTripTime * 1000;
-          if (typeof report.jitter === "number") jitterMs = Math.max(jitterMs ?? 0, report.jitter * 1000);
+          if (typeof report.jitter === "number") jitterUpMs = report.jitter * 1000;
         }
         if (report.type === "inbound-rtp" && report.kind === "audio") {
-          if (typeof report.jitter === "number") jitterMs = Math.max(jitterMs ?? 0, report.jitter * 1000);
+          // Our view of Azure's downlink to us.
+          if (typeof report.jitter === "number") jitterDownMs = report.jitter * 1000;
           if (typeof report.packetsReceived === "number") inboundPacketsReceived = report.packetsReceived;
           if (typeof report.packetsLost === "number") inboundPacketsLost = report.packetsLost;
           if (typeof report.totalAudioEnergy === "number") inboundTotalEnergy = report.totalAudioEnergy;
@@ -1482,7 +1464,8 @@ function startStatsPolling() {
       prevPacketsReceived = inboundPacketsReceived;
 
       state.metrics.rtcRttMs = rttMs;
-      state.metrics.rtcJitterMs = jitterMs;
+      state.metrics.rtcJitterUpMs = jitterUpMs;
+      state.metrics.rtcJitterDownMs = jitterDownMs;
       if (lossPct != null) state.metrics.rtcLossPct = lossPct;
       renderNetworkChips();
     } catch (error) {
@@ -1528,11 +1511,14 @@ function renderMetrics() {
   setTileValue(els.metric.tileTtft, els.metric.ttft, els.metric.ttftHint, m.turn.ttftMs, m.last.ttftMs, "ms", gradeLatency);
   setTileValue(els.metric.tileTtfa, els.metric.ttfa, els.metric.ttfaHint, m.turn.ttfaMs, m.last.ttfaMs, "ms", gradeLatency, state.mode === "agent" ? null : "仅 Agent 模式");
   setTileValue(els.metric.tileE2e, els.metric.e2e, els.metric.e2eHint, m.turn.e2eMs, m.last.e2eMs, "ms", gradeE2e);
-  setTileValue(els.metric.tileRtf, els.metric.rtf, els.metric.rtfHint, m.turn.rtfRatio, m.last.rtfRatio, "ratio", gradeRtf);
 
   els.metric.chars.textContent = `${m.chars} · ${m.deltaCount}Δ`;
   els.metric.charRate.textContent = m.charSamples.reduce((s, x) => s + x.n, 0).toString();
   els.metric.deltaRate.textContent = m.deltaSamples.length.toString();
+  if (els.metric.outTokPerSec) {
+    const tps = m.turn.outTokPerSec ?? m.last.outTokPerSec;
+    els.metric.outTokPerSec.textContent = tps != null ? tps.toString() : "—";
+  }
   els.metric.turns.textContent = String(m.turns);
   if (els.metric.azure) els.metric.azure.textContent = formatServerTiming();
   renderNetworkChips();
@@ -1584,15 +1570,10 @@ function gradeE2e(ms) {
   return "bad";
 }
 
-function gradeRtf(ratio) {
-  if (ratio < 1) return "good";
-  if (ratio < 1.5) return "ok";
-  return "bad";
-}
-
 function renderNetworkChips() {
   els.metric.rtt.textContent = formatNumber(state.metrics.rtcRttMs, "ms");
-  els.metric.jitter.textContent = formatNumber(state.metrics.rtcJitterMs, "ms");
+  els.metric.jitterUp.textContent = formatNumber(state.metrics.rtcJitterUpMs, "ms");
+  els.metric.jitterDown.textContent = formatNumber(state.metrics.rtcJitterDownMs, "ms");
   els.metric.loss.textContent = state.metrics.rtcLossPct == null ? "—" : `${state.metrics.rtcLossPct.toFixed(1)}%`;
 }
 
@@ -1708,7 +1689,7 @@ const AGGREGATE_KEYS = [
   { row: "ttft", field: "ttftMs", unit: "ms" },
   { row: "ttfa", field: "ttfaMs", unit: "ms" },
   { row: "e2e", field: "e2eMs", unit: "ms" },
-  { row: "rtf", field: "rtfRatio", unit: "ratio" },
+  { row: "tokps", field: "outTokPerSec", unit: "tokps" },
 ];
 
 function renderAggregate() {
@@ -1762,5 +1743,7 @@ function percentile(sortedValues, q) {
 
 function formatAggregateValue(value, unit) {
   if (value == null || !Number.isFinite(value)) return "—";
-  return unit === "ratio" ? `${value.toFixed(2)}×` : `${Math.round(value)}ms`;
+  if (unit === "ratio") return `${value.toFixed(2)}×`;
+  if (unit === "tokps") return `${value.toFixed(1)}`;
+  return `${Math.round(value)}ms`;
 }

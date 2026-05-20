@@ -420,11 +420,20 @@ h1 {
   grid-template-columns: minmax(300px, 348px) minmax(0, 1fr);
   gap: 1rem;
   padding: 0 1rem 1rem;
+  align-items: start;
 }
 
 .controls,
 .workspace {
   min-width: 0;
+}
+
+.workspace {
+  /* Cap the right column so components don't stretch absurdly wide on large
+     screens, and so collapsed metric / log bars don't leave a big empty band
+     when the controls column is much taller. */
+  max-width: 780px;
+  width: 100%;
 }
 
 .controls {
@@ -612,7 +621,7 @@ audio {
 }
 
 .cards.single-card .transcript {
-  min-height: 360px;
+  min-height: 280px;
 }
 
 .transcript-card,

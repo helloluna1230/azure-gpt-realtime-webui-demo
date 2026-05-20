@@ -150,6 +150,11 @@
               </select>
             </div>
 
+            <div class="field field-shared field-instructions">
+              <label for="transcriptionPrompt">转写引导词（可选）</label>
+              <textarea id="transcriptionPrompt" rows="3" placeholder="塞入专有名词/英文术语/人名等帮助 Whisper 命中，最多 ~224 token。例如：Azure OpenAI, gpt-realtime, GitHub Copilot。忽略片头片尾字幕。"></textarea>
+            </div>
+
             <div class="field field-agent field-instructions">
               <label for="instructions">Agent 指令（可选）</label>
               <textarea id="instructions" rows="6" placeholder="留空使用内置中文/英文多语言实时助手提示词"></textarea>
@@ -215,35 +220,32 @@
                   <span id="metricsProgressFill" class="metrics-progress-fill"></span>
                 </div>
                 <div class="metrics-grid">
-                  <article class="metric-tile" data-metric="ttft">
+                  <article class="metric-tile" data-metric="ttft" title="TTFT（Time To First Token）首字延迟：从语音结束（speech_stopped，或文本输入下的 response.created）到收到模型首个输出 delta 的时间。反映 snappiness（抢答感），&lt;500ms 好，&lt;1200ms 可接受。">
                     <span class="metric-tile-label">TTFT 首字延迟</span>
                     <span class="metric-tile-value"><span id="metricTtft">—</span><small>ms</small></span>
                     <span class="metric-tile-hint" id="metricTtftHint">本轮 / 上轮</span>
                   </article>
-                  <article class="metric-tile" data-metric="ttfa">
+                  <article class="metric-tile" data-metric="ttfa" title="TTFA（Time To First Audio）首声延迟：同锚点，到下行音频第一次能量 > 0 的时刻。衡量“多久听到反馈”，仅 Agent（语音回复）模式有义。Transcribe/Translate 没有下行音频所以为—。">
                     <span class="metric-tile-label">TTFA 首声延迟</span>
                     <span class="metric-tile-value"><span id="metricTtfa">—</span><small>ms</small></span>
                     <span class="metric-tile-hint" id="metricTtfaHint">仅 Agent 模式</span>
                   </article>
-                  <article class="metric-tile" data-metric="e2e">
+                  <article class="metric-tile" data-metric="e2e" title="E2E（End-to-End）端到端总耗时：从你说完话（speech_stopped，文本输入则从 response.created）到本轮 response.done 的完整时长。包含三段：① 模型思考（TTFT 等待首 token）+ ② 流式生成全部 token 的时间（约等于 output_tokens / tok-per-sec）+ ③ 最后一段音频通过 WebRTC 抵达浏览器的尾巴。代表用户从结束发言到 AI 把话讲完的总等待感受。参考：&lt;1500ms 好，&lt;3000ms 可接受；若 TTFT 已经很低但 E2E 仍长，多半是输出太长或 tok/s 偏低。">
                     <span class="metric-tile-label">E2E 端到端</span>
                     <span class="metric-tile-value"><span id="metricE2e">—</span><small>ms</small></span>
                     <span class="metric-tile-hint" id="metricE2eHint">stop → done</span>
-                  </article>
-                  <article class="metric-tile" data-metric="rtf">
-                    <span class="metric-tile-label">RTF 实时系数</span>
-                    <span class="metric-tile-value"><span id="metricRtf">—</span><small>×</small></span>
-                    <span class="metric-tile-hint" id="metricRtfHint">&lt; 1 即超实时</span>
                   </article>
                 </div>
                 <div class="metrics-chips">
                   <span class="metric-chip" title="本轮已收到的字符数 / delta 数"><b>Chars</b><span id="metricChars">0</span></span>
                   <span class="metric-chip" title="字符吞吐（最近 1s）"><b>Char/s</b><span id="metricCharRate">0</span></span>
                   <span class="metric-chip" title="每秒收到的 delta 数"><b>Δ/s</b><span id="metricDeltaRate">0</span></span>
+                  <span class="metric-chip" title="模型实际生成速度（response.done.usage.output_tokens / 从首个 delta 到 done 的时长）"><b>Out tok/s</b><span id="metricOutTokPerSec">—</span></span>
                   <span class="metric-chip" title="握手：ICE connected / DataChannel open / session.created"><b>Setup</b><span id="metricSetup">—</span></span>
                   <span class="metric-chip" title="Azure 服务端耗时（从 Server-Timing 响应头获取）"><b>Azure</b><span id="metricAzure">—</span></span>
                   <span class="metric-chip" title="WebRTC RTT（远端往返）"><b>RTT</b><span id="metricRtt">—</span></span>
-                  <span class="metric-chip" title="WebRTC jitter（下行抖动）"><b>Jitter</b><span id="metricJitter">—</span></span>
+                  <span class="metric-chip" title="上行 jitter：Azure 接收我们麦克风的抖动（越低越稳）"><b>Jitter↑</b><span id="metricJitterUp">—</span></span>
+                  <span class="metric-chip" title="下行 jitter：我们接收 Azure 音频的抖动"><b>Jitter↓</b><span id="metricJitterDown">—</span></span>
                   <span class="metric-chip" title="下行音频丢包率"><b>Loss</b><span id="metricLoss">—</span></span>
                   <span class="metric-chip" title="本会话已完成的对话轮数"><b>Turns</b><span id="metricTurns">0</span></span>
                 </div>
@@ -261,7 +263,7 @@
                       <tr data-row="ttft"><th>TTFT</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
                       <tr data-row="ttfa"><th>TTFA</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
                       <tr data-row="e2e"><th>E2E</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
-                      <tr data-row="rtf"><th>RTF</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
+                      <tr data-row="tokps"><th>tok/s</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
                     </tbody>
                   </table>
                 </div>
