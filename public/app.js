@@ -18,6 +18,9 @@ const state = {
   agentSpeaking: false,
   echoSuppressUntil: 0,
   echoNoticeShown: false,
+  micGated: false,
+  micGateTimer: 0,
+  openSourceSectionOffset: -1,
   metrics: createMetricsState(),
 };
 
@@ -127,6 +130,7 @@ const els = {
     fill: document.querySelector("#micMeterFill"),
     peak: document.querySelector("#micMeterPeak"),
     value: document.querySelector("#micMeterValue"),
+    gateBadge: document.querySelector("#micGateBadge"),
   },
 };
 
@@ -443,6 +447,7 @@ function routeServerEvent(event) {
 
   if (event.type === "response.created") {
     state.agentSpeaking = true;
+    gateLocalMicForAgent();
   }
 
   if (
@@ -451,7 +456,8 @@ function routeServerEvent(event) {
     event.type === "response.canceled"
   ) {
     state.agentSpeaking = false;
-    state.echoSuppressUntil = performance.now() + 700;
+    state.echoSuppressUntil = performance.now() + 400;
+    scheduleLocalMicUngate();
   }
 
   if (event.type === "input_audio_buffer.speech_started") {
@@ -762,6 +768,9 @@ function appendTranscript(target, label, text, { startNew = false, complete = fa
     if (state[bufferKey] && !state[bufferKey].endsWith("\n\n")) {
       state[bufferKey] += "\n";
     }
+    if (transcriptTarget(target) === "source" && target === "source") {
+      state.openSourceSectionOffset = state[bufferKey].length;
+    }
     state[bufferKey] += `【${label}】\n`;
     state[openKey] = true;
   } else if (!state[openKey] && !hasVisibleText) {
@@ -778,6 +787,9 @@ function appendTranscript(target, label, text, { startNew = false, complete = fa
       state[bufferKey] += "\n";
     }
     state[openKey] = false;
+    if (target === "source") {
+      state.openSourceSectionOffset = -1;
+    }
   }
 
   renderTranscript(target);
@@ -870,6 +882,11 @@ function appendInputAudioTranscriptionDelta(delta) {
     return;
   }
 
+  if (shouldSuppressEchoTranscript()) {
+    noteEchoSuppression();
+    return;
+  }
+
   appendSource(delta);
 }
 
@@ -883,7 +900,73 @@ function appendCompletedInputAudioTranscript(transcript) {
     return;
   }
 
+  if (shouldSuppressEchoTranscript()) {
+    rollbackOpenSourceSection();
+    noteEchoSuppression();
+    return;
+  }
+
   appendCompletedSourceTranscript(transcript);
+}
+
+function shouldSuppressEchoTranscript() {
+  if (state.mode !== "agent") return false;
+  if (els.interruptResponse?.checked) return false;
+  if (state.agentSpeaking) return true;
+  return performance.now() < state.echoSuppressUntil;
+}
+
+function noteEchoSuppression() {
+  if (state.echoNoticeShown) return;
+  state.echoNoticeShown = true;
+  log(
+    "[回声抑制] Agent 说话期间麦克风已静音；任何漏入的转写已丢弃。"
+  );
+}
+
+function gateLocalMicForAgent() {
+  if (state.mode !== "agent") return;
+  if (els.interruptResponse?.checked) return;
+  if (state.micGateTimer) {
+    clearTimeout(state.micGateTimer);
+    state.micGateTimer = 0;
+  }
+  setLocalMicEnabled(false, "agent speaking");
+}
+
+function scheduleLocalMicUngate() {
+  if (state.mode !== "agent") return;
+  if (state.micGateTimer) {
+    clearTimeout(state.micGateTimer);
+  }
+  state.micGateTimer = setTimeout(() => {
+    state.micGateTimer = 0;
+    setLocalMicEnabled(true, "agent finished");
+  }, 400);
+}
+
+function setLocalMicEnabled(enabled, reason) {
+  const tracks = state.localStream?.getAudioTracks?.() || [];
+  if (!tracks.length) return;
+  const prev = state.micGated;
+  state.micGated = !enabled;
+  for (const track of tracks) {
+    track.enabled = enabled;
+  }
+  if (els.mic?.gateBadge) {
+    els.mic.gateBadge.classList.toggle("hidden", enabled);
+  }
+  if (prev !== state.micGated) {
+    log(`[mic] ${enabled ? "解除" : "静音"} (${reason})`);
+  }
+}
+
+function rollbackOpenSourceSection() {
+  if (state.openSourceSectionOffset < 0) return;
+  state.sourceBuffer = state.sourceBuffer.slice(0, state.openSourceSectionOffset);
+  state.openSourceSectionOffset = -1;
+  state.sourceSectionOpen = false;
+  renderTranscript("source");
 }
 
 function appendInputAudioTranscriptionFailure(event) {
@@ -1052,6 +1135,15 @@ function clearTranscripts() {
   state.agentSpeaking = false;
   state.echoSuppressUntil = 0;
   state.echoNoticeShown = false;
+  state.openSourceSectionOffset = -1;
+  if (state.micGateTimer) {
+    clearTimeout(state.micGateTimer);
+    state.micGateTimer = 0;
+  }
+  state.micGated = false;
+  if (els.mic?.gateBadge) {
+    els.mic.gateBadge.classList.add("hidden");
+  }
   els.sourceTranscript.innerHTML = "";
   els.outputTranscript.innerHTML = "";
   els.eventLog.textContent = "";
