@@ -23,7 +23,7 @@ const translateAzureApiKey = forceEntraId ? "" : optionalEnv("AZURE_OPENAI_TRANS
 const safetyIdentifier = optionalEnv("OPENAI_SAFETY_IDENTIFIER");
 
 const deployments = {
-  agent: optionalEnv("AZURE_OPENAI_REALTIME2_DEPLOYMENT") || "gpt-realtime-2",
+  agent: optionalEnv("AZURE_OPENAI_REALTIME2_DEPLOYMENT") || "gpt-realtime-2.1",
   translate: optionalEnv("AZURE_OPENAI_TRANSLATE_DEPLOYMENT") || "gpt-realtime-translate",
   transcribe: optionalEnv("AZURE_OPENAI_WHISPER_DEPLOYMENT") || "gpt-realtime-whisper",
 };
@@ -348,7 +348,7 @@ Keep the spoken answer short enough to fit in one continuous audio item. If more
 
 function defaultRealtime2Instructions() {
   return `# Role and Objective
-You are a concise multilingual realtime voice assistant running on Azure GPT-realtime-2.
+You are a concise multilingual realtime voice assistant running on Azure GPT-realtime-2.1.
 
 # Language
 Reply in the user's language by default. If language confidence is low, ask whether to continue in English or Chinese.
@@ -397,7 +397,7 @@ async function getBearerToken() {
   }
 
   credential ||= new DefaultAzureCredential();
-  const token = await credential.getToken("https://ai.azure.com/.default");
+  const token = await credential.getToken("https://cognitiveservices.azure.com/.default");
   cachedBearerToken = token.token;
   cachedBearerTokenExpiresAt = token.expiresOnTimestamp;
   return cachedBearerToken;

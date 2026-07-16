@@ -30,7 +30,7 @@
             <span class="word" style="--i:2"><span class="word-inner">Studio</span></span>
           </h1>
           <p class="hero-copy" style="--i:3">
-            一个浏览器麦克风入口，优雅切换 <strong>GPT-realtime-2</strong> 语音 Agent、
+            一个浏览器麦克风入口，优雅切换 <strong>GPT-realtime-2.1</strong> 语音 Agent、
             <strong>GPT-realtime-translate</strong> 实时翻译与
             <strong>GPT-realtime-whisper</strong> 流式转写。
           </p>
@@ -52,7 +52,7 @@
 
       <section class="panel">
         <div class="tabs" role="tablist" aria-label="Realtime demo modes">
-          <button class="tab active" type="button" data-mode="agent" data-reveal style="--i:1"><span>Agent</span><small>GPT-realtime-2</small></button>
+          <button class="tab active" type="button" data-mode="agent" data-reveal style="--i:1"><span>Agent</span><small>GPT-realtime-2.1</small></button>
           <button class="tab" type="button" data-mode="translate" data-reveal style="--i:2"><span>Translate</span><small>Live interpretation</small></button>
           <button class="tab" type="button" data-mode="transcribe" data-reveal style="--i:3"><span>Whisper</span><small>Streaming STT</small></button>
         </div>
@@ -61,7 +61,7 @@
           <aside class="controls">
             <div class="mode-copy active" data-copy="agent">
               <h2>语音 Agent</h2>
-              <p>标准 Realtime 会话，使用 <code>gpt-realtime-2</code> 进行语音输入/输出，并启用 <code>reasoning.effort</code>。</p>
+              <p>标准 Realtime 会话，使用 <code>gpt-realtime-2.1</code> 进行语音输入/输出，并启用 <code>reasoning.effort</code>。</p>
             </div>
             <div class="mode-copy" data-copy="translate">
               <h2>实时翻译</h2>
@@ -103,6 +103,16 @@
                 <option value="server_vad" selected>server_vad</option>
                 <option value="semantic_vad">semantic_vad</option>
                 <option value="none">手动 commit</option>
+              </select>
+            </div>
+
+            <div class="field field-no-translate field-vad-semantic hidden">
+              <label for="semanticEagerness">Semantic 灵敏度</label>
+              <select id="semanticEagerness">
+                <option value="auto" selected>auto · 推荐</option>
+                <option value="low">low · 适合长句</option>
+                <option value="medium">medium</option>
+                <option value="high">high · 快速响应</option>
               </select>
             </div>
 
@@ -241,6 +251,8 @@
                   <span class="metric-chip" title="字符吞吐（最近 1s）"><b>Char/s</b><span id="metricCharRate">0</span></span>
                   <span class="metric-chip" title="每秒收到的 delta 数"><b>Δ/s</b><span id="metricDeltaRate">0</span></span>
                   <span class="metric-chip" title="模型实际生成速度（response.done.usage.output_tokens / 从首个 delta 到 done 的时长）"><b>Out tok/s</b><span id="metricOutTokPerSec">—</span></span>
+                  <span class="metric-chip" title="本轮输入 token 总数（response.done.usage.input_tokens）。含音频 + 文本 + 历史。越大成本越高，且 cache miss 时会拉高 TTFT。"><b>In tok</b><span id="metricInTok">—</span></span>
+                  <span class="metric-chip" title="Prompt cache 命中率 = cached_tokens / input_tokens。越高越便宜，且避免重复 prefill 拖慢 TTFT。修改 instructions / tools 会让它掋到 0。"><b>Cache</b><span id="metricCacheRate">—</span></span>
                   <span class="metric-chip" title="握手：ICE connected / DataChannel open / session.created"><b>Setup</b><span id="metricSetup">—</span></span>
                   <span class="metric-chip" title="Azure 服务端耗时（从 Server-Timing 响应头获取）"><b>Azure</b><span id="metricAzure">—</span></span>
                   <span class="metric-chip" title="WebRTC RTT（远端往返）"><b>RTT</b><span id="metricRtt">—</span></span>
@@ -264,6 +276,7 @@
                       <tr data-row="ttfa"><th>TTFA</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
                       <tr data-row="e2e"><th>E2E</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
                       <tr data-row="tokps"><th>tok/s</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
+                      <tr data-row="intok"><th>In tok</th><td data-cell="p50">—</td><td data-cell="p95">—</td><td data-cell="min">—</td><td data-cell="max">—</td></tr>
                     </tbody>
                   </table>
                 </div>

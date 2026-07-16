@@ -34,8 +34,8 @@ function createMetricsState() {
     firstAudibleAt: 0,
     turnCompletedAt: 0,
     audioInputMs: 0,
-    turn: { ttftMs: null, ttfaMs: null, e2eMs: null, outTokPerSec: null, outputTokens: null },
-    last: { ttftMs: null, ttfaMs: null, e2eMs: null, outTokPerSec: null, outputTokens: null },
+    turn: { ttftMs: null, ttfaMs: null, e2eMs: null, outTokPerSec: null, outputTokens: null, inputTokens: null, cachedTokens: null, audioInTokens: null, textInTokens: null },
+    last: { ttftMs: null, ttfaMs: null, e2eMs: null, outTokPerSec: null, outputTokens: null, inputTokens: null, cachedTokens: null, audioInTokens: null, textInTokens: null },
     history: [],
     serverTiming: null,
     chars: 0,
@@ -116,6 +116,8 @@ const els = {
     azure: document.querySelector("#metricAzure"),
     rtt: document.querySelector("#metricRtt"),
     outTokPerSec: document.querySelector("#metricOutTokPerSec"),
+    inTok: document.querySelector("#metricInTok"),
+    cacheRate: document.querySelector("#metricCacheRate"),
     jitterUp: document.querySelector("#metricJitterUp"),
     jitterDown: document.querySelector("#metricJitterDown"),
     loss: document.querySelector("#metricLoss"),
@@ -200,9 +202,14 @@ function wireUi() {
   wireRange(els.silenceDurationMs, els.silenceDurationMsValue, (v) => `${v} ms`);
   wireRange(els.prefixPaddingMs, els.prefixPaddingMsValue, (v) => `${v} ms`);
   const updateVadVisibility = () => {
-    const showVad = els.turnDetection?.value === "server_vad";
+    const val = els.turnDetection?.value;
+    const showVad = val === "server_vad";
+    const showSemantic = val === "semantic_vad";
     document.querySelectorAll(".field-vad-server").forEach((node) => {
       node.classList.toggle("hidden", !showVad);
+    });
+    document.querySelectorAll(".field-vad-semantic").forEach((node) => {
+      node.classList.toggle("hidden", !showSemantic);
     });
   };
   els.turnDetection?.addEventListener("change", updateVadVisibility);
@@ -528,6 +535,11 @@ function routeServerEvent(event) {
     onTurnCompleted(event.response);
     appendExtractedResponse(event.response);
     surfaceIncompleteResponse(event.response);
+    // Close any user section kept open for VAD merging (fires when the agent
+    // response produced no audio output, so appendCompletedOutputEvent never ran).
+    if (state.sourceSectionOpen) {
+      appendSource("\n", { complete: true });
+    }
     return;
   }
 
@@ -631,6 +643,10 @@ function collectOptions() {
     options.vadThreshold = Number(els.vadThreshold.value);
     options.silenceDurationMs = Number(els.silenceDurationMs.value);
     options.prefixPaddingMs = Number(els.prefixPaddingMs.value);
+  }
+  if (els.turnDetection.value === "semantic_vad") {
+    const eagerness = document.querySelector("#semanticEagerness")?.value;
+    if (eagerness) options.semanticEagerness = eagerness;
   }
 
   if (state.mode === "agent") {
@@ -1008,11 +1024,18 @@ function appendCompletedSourceTranscript(transcript) {
   const normalizedBuffer = normalizeTranscript(transcriptBuffer("source"));
   const normalizedTranscript = normalizeTranscript(transcript);
   if (normalizedBuffer.endsWith(normalizedTranscript)) {
-    appendSource("\n", { complete: true });
+    // In agent mode: keep the section open so back-to-back VAD segments
+    // (from brief pauses within one utterance) continue in the same bubble.
+    // The section is closed when the agent response starts (startNew=true on
+    // the first agent delta) or by the response.done fallback below.
+    // In transcribe/translate mode: close immediately, each item is discrete.
+    if (state.mode !== "agent") {
+      appendSource("\n", { complete: true });
+    }
     return;
   }
 
-  appendSource(transcript, { startNew: true, complete: true });
+  appendSource(transcript, { startNew: true, complete: state.mode !== "agent" });
 }
 
 function appendCompletedOutputTranscript(transcript) {
@@ -1237,7 +1260,7 @@ function onSpeechStarted() {
   state.metrics.firstAudibleAt = 0;
   state.metrics.turnCompletedAt = 0;
   state.metrics.audioInputMs = 0;
-  state.metrics.turn = { ttftMs: null, ttfaMs: null, e2eMs: null, outTokPerSec: null, outputTokens: null };
+  state.metrics.turn = { ttftMs: null, ttfaMs: null, e2eMs: null, outTokPerSec: null, outputTokens: null, inputTokens: null, cachedTokens: null, audioInTokens: null, textInTokens: null };
   state.metrics.chars = 0;
   state.metrics.deltaCount = 0;
   state.metrics.charSamples = [];
@@ -1298,6 +1321,22 @@ function onTurnCompleted(response) {
     const genMs = genStart ? now - genStart : 0;
     if (genMs > 0) {
       state.metrics.turn.outTokPerSec = Math.round((outTok / genMs) * 1000 * 10) / 10;
+    }
+  }
+  // Input tokens: total + cached + audio/text split.
+  // Drives cost visibility and is the bridge between context-length and TTFT.
+  const inTok = response?.usage?.input_tokens;
+  if (typeof inTok === "number") {
+    state.metrics.turn.inputTokens = inTok;
+    const details = response?.usage?.input_token_details || {};
+    if (typeof details.cached_tokens === "number") {
+      state.metrics.turn.cachedTokens = details.cached_tokens;
+    }
+    if (typeof details.audio_tokens === "number") {
+      state.metrics.turn.audioInTokens = details.audio_tokens;
+    }
+    if (typeof details.text_tokens === "number") {
+      state.metrics.turn.textInTokens = details.text_tokens;
     }
   }
   state.metrics.last = { ...state.metrics.turn };
@@ -1519,6 +1558,33 @@ function renderMetrics() {
     const tps = m.turn.outTokPerSec ?? m.last.outTokPerSec;
     els.metric.outTokPerSec.textContent = tps != null ? tps.toString() : "—";
   }
+  if (els.metric.inTok) {
+    const inTok = m.turn.inputTokens ?? m.last.inputTokens;
+    els.metric.inTok.textContent = inTok != null ? formatTokenCount(inTok) : "—";
+  }
+  if (els.metric.cacheRate) {
+    const inTok = m.turn.inputTokens ?? m.last.inputTokens;
+    const cached = m.turn.cachedTokens ?? m.last.cachedTokens;
+    if (inTok != null && cached != null && inTok > 0) {
+      els.metric.cacheRate.textContent = `${Math.round((cached / inTok) * 100)}%`;
+    } else {
+      els.metric.cacheRate.textContent = "—";
+    }
+  }
+  // Smart TTFT hint: if context is large + cache miss + TTFT is high,
+  // prefill is likely the culprit. Surface that inline so users don't
+  // hunt for it.
+  const ttftMs = m.turn.ttftMs ?? m.last.ttftMs;
+  const inTokForHint = m.turn.inputTokens ?? m.last.inputTokens;
+  const cachedForHint = m.turn.cachedTokens ?? m.last.cachedTokens;
+  if (
+    ttftMs != null && ttftMs > 600 &&
+    inTokForHint != null && inTokForHint > 1500 &&
+    cachedForHint != null &&
+    cachedForHint / inTokForHint < 0.3
+  ) {
+    els.metric.ttftHint.textContent = `上下文 ${formatTokenCount(inTokForHint)} tok【0 cache】→ prefill 拖累`;
+  }
   els.metric.turns.textContent = String(m.turns);
   if (els.metric.azure) els.metric.azure.textContent = formatServerTiming();
   renderNetworkChips();
@@ -1580,6 +1646,12 @@ function renderNetworkChips() {
 function formatNumber(value, unit) {
   if (value == null || !Number.isFinite(value)) return "—";
   return `${Math.round(value)}${unit}`;
+}
+
+function formatTokenCount(n) {
+  if (n == null || !Number.isFinite(n)) return "—";
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }
 
 function updateSetupHint() {
@@ -1690,6 +1762,7 @@ const AGGREGATE_KEYS = [
   { row: "ttfa", field: "ttfaMs", unit: "ms" },
   { row: "e2e", field: "e2eMs", unit: "ms" },
   { row: "tokps", field: "outTokPerSec", unit: "tokps" },
+  { row: "intok", field: "inputTokens", unit: "tok" },
 ];
 
 function renderAggregate() {
@@ -1745,5 +1818,6 @@ function formatAggregateValue(value, unit) {
   if (value == null || !Number.isFinite(value)) return "—";
   if (unit === "ratio") return `${value.toFixed(2)}×`;
   if (unit === "tokps") return `${value.toFixed(1)}`;
+  if (unit === "tok") return formatTokenCount(Math.round(value));
   return `${Math.round(value)}ms`;
 }
