@@ -178,8 +178,17 @@
 
           <section class="workspace">
             <div class="audio-strip">
-              <span>Remote audio</span>
-              <audio id="remoteAudio" autoplay playsinline controls></audio>
+              <span class="audio-strip-label">Remote audio</span>
+              <audio id="remoteAudio" autoplay playsinline></audio>
+              <div class="audio-player">
+                <div class="audio-waveform" id="audioWaveform" aria-hidden="true">
+                  <span></span><span></span><span></span><span></span><span></span>
+                </div>
+                <span class="audio-status" id="audioStatus">等待连接</span>
+                <button id="audioPlayBtn" class="audio-play-btn" type="button" aria-label="手动播放远端音频" title="自动播放被浏览器拦截时点击" hidden>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M2.5 2l9 5-9 5V2z"/></svg>
+                </button>
+              </div>
             </div>
 
             <div class="mic-strip" aria-label="Local microphone level">
@@ -283,7 +292,7 @@
               </section>
             </details>
 
-            <details class="log" open>
+            <details class="log">
               <summary>事件日志</summary>
               <pre id="eventLog"></pre>
             </details>

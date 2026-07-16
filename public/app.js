@@ -133,6 +133,11 @@ const els = {
     value: document.querySelector("#micMeterValue"),
     gateBadge: document.querySelector("#micGateBadge"),
   },
+  audio: {
+    waveform: document.querySelector("#audioWaveform"),
+    status: document.querySelector("#audioStatus"),
+    playBtn: document.querySelector("#audioPlayBtn"),
+  },
 };
 
 initialize();
@@ -168,6 +173,13 @@ async function initialize() {
       const translateDeployment = translateTab?.querySelector("small");
       if (translateDeployment) {
         translateDeployment.textContent = state.runtime.deployments.translate;
+      }
+    }
+    if (state.runtime?.deployments?.transcribe) {
+      const transcribeTab = document.querySelector('[data-mode="transcribe"]');
+      const transcribeDeployment = transcribeTab?.querySelector("small");
+      if (transcribeDeployment) {
+        transcribeDeployment.textContent = state.runtime.deployments.transcribe;
       }
     }
     if (!state.runtime?.capabilities?.agentReasoning) {
@@ -222,9 +234,24 @@ function wireUi() {
 
   els.remoteAudio.addEventListener("playing", () => {
     log("Remote audio is playing.");
+    els.audio.waveform?.classList.add("is-playing");
+    if (els.audio.status) els.audio.status.textContent = "正在播放";
+    if (els.audio.playBtn) els.audio.playBtn.hidden = true;
   });
-  els.remoteAudio.addEventListener("pause", () => log("Remote audio paused."));
-  els.remoteAudio.addEventListener("error", () => log(`Remote audio error: ${els.remoteAudio.error?.message || "unknown"}`));
+  els.remoteAudio.addEventListener("pause", () => {
+    log("Remote audio paused.");
+    els.audio.waveform?.classList.remove("is-playing");
+    if (els.audio.status) els.audio.status.textContent = "已暂停";
+  });
+  els.remoteAudio.addEventListener("error", () => {
+    log(`Remote audio error: ${els.remoteAudio.error?.message || "unknown"}`);
+    els.audio.waveform?.classList.remove("is-playing");
+    if (els.audio.status) els.audio.status.textContent = "播放出错";
+  });
+  els.audio.playBtn?.addEventListener("click", () => {
+    els.remoteAudio.play().catch(() => {});
+    if (els.audio.playBtn) els.audio.playBtn.hidden = true;
+  });
 }
 
 function switchMode(mode) {
@@ -406,6 +433,9 @@ async function stopSession() {
   }
 
   els.remoteAudio.srcObject = null;
+  els.audio.waveform?.classList.remove("is-playing");
+  if (els.audio.status) els.audio.status.textContent = "等待连接";
+  if (els.audio.playBtn) els.audio.playBtn.hidden = true;
   state.pc = null;
   state.dc = null;
   state.localStream = null;
@@ -624,7 +654,9 @@ function playRemoteAudio(reason) {
   const result = els.remoteAudio.play();
   if (result?.catch) {
     result.catch((error) => {
-      log(`Remote audio play blocked after ${reason}: ${error.message}. Click the audio control's play button once if needed.`);
+      log(`Remote audio play blocked after ${reason}: ${error.message}. Click the play button to start.`);
+      if (els.audio.playBtn) els.audio.playBtn.hidden = false;
+      if (els.audio.status) els.audio.status.textContent = "点击 ▶ 手动播放";
     });
   }
 }
@@ -1182,6 +1214,7 @@ function setControlsBusy(isBusy) {
   els.startBtn.disabled = isBusy || state.connected;
   els.stopBtn.disabled = !isBusy && !state.connected;
   els.tabs.forEach((tab) => (tab.disabled = isBusy || state.connected));
+  els.startBtn.classList.toggle("is-loading", isBusy && !state.connected);
 }
 
 function updateActionButtons(enabled) {
